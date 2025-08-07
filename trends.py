@@ -112,7 +112,7 @@ class BlueskySession:
                 print(f"❌ An API error occurred: {error_data.get('message')}")
                 raise e
 
-    def get_whats_hot_classic(self, max_posts=300):
+    def get_whats_hot_classic(self, max_posts):
         """
         Fetches a large number of posts from the 'What's Hot Classic' feed
         using pagination.
@@ -176,9 +176,19 @@ if __name__ == "__main__":
     session = BlueskySession(user_handle, app_password)
     if session.create_session():
         
-        # 2. Fetch posts from the feed
-        # We will fetch up to 300 posts as an example
-        hot_posts = session.get_whats_hot_classic(max_posts=300)
+        # NEW: Ask user for the number of posts to fetch
+        while True:
+            try:
+                num_posts_to_fetch = int(input("Enter the total number of posts you want to fetch: "))
+                if num_posts_to_fetch > 0:
+                    break
+                else:
+                    print("Please enter a number greater than 0.")
+            except ValueError:
+                print("Invalid input. Please enter a whole number.")
+
+        # 2. Fetch posts from the feed based on user input
+        hot_posts = session.get_whats_hot_classic(max_posts=num_posts_to_fetch)
         
         print(f"\n✨ --- Fetching Complete --- ✨")
         print(f"Total posts retrieved: {len(hot_posts)}")
@@ -187,7 +197,7 @@ if __name__ == "__main__":
         if hot_posts:
             # Create a unique filename with a timestamp
             timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-            filename = f"bluesky_posts_{timestamp}.json"
+            filename = f"Trends_bluesky_{timestamp}.json"
             
             try:
                 with open(filename, 'w', encoding='utf-8') as f:
