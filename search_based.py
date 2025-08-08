@@ -202,7 +202,8 @@ if __name__ == "__main__":
             # 6. Post-fetch language filter
             final_posts = []
             while True:
-                lang_choice = clean_input(input("\nFilter by language? (Enter 2-letter code like 'en', 'es', or leave blank for all): ")).lower()
+                # FIX: Added .strip() to handle accidental whitespace
+                lang_choice = clean_input(input("\nFilter by language? (Enter 2-letter code like 'en', 'es', or leave blank for all): ")).lower().strip()
                 if not lang_choice:
                     final_posts = fetched_posts
                     print("No language filter applied.")
