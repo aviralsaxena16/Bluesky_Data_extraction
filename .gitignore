@@ -1,2 +1,3 @@
 *.json
 !sample output/*.json
+.env
