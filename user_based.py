@@ -1,3 +1,4 @@
+from datetime import datetime, timezone
 import requests
 import os
 import time
@@ -104,13 +105,20 @@ class BlueskySession:
                 print(f"❌ An API error occurred: {error_data.get('message')}")
                 raise e
 
-    def get_all_user_posts(self, actor_handle):
+
+    def get_all_user_posts(self, actor_handle, start_time=None, end_time=None, max_posts=None):
         """
-        Fetches the entire post history for a given user using pagination.
+        Fetches posts for a given user using pagination, with optional timestamp filtering and limit.
         """
-        print(f"\nFetching all posts for @{actor_handle}...")
+        print(f"\nFetching posts for @{actor_handle}...")
         all_posts = []
         cursor = None
+        
+        # If no filter, use full range
+        if start_time is None:
+            start_time = datetime.min.replace(tzinfo=timezone.utc)
+        if end_time is None:
+            end_time = datetime.max.replace(tzinfo=timezone.utc)
         
         while True:
             params = {
@@ -122,15 +130,28 @@ class BlueskySession:
 
             try:
                 response = self._make_request("GET", "app.bsky.feed.getAuthorFeed", params=params)
-                
                 posts_on_page = response.get('feed', [])
                 if not posts_on_page:
-                    print("No more posts found for this user. Halting.")
+                    print("No more posts found for this user.")
                     break
-                
-                all_posts.extend(posts_on_page)
-                print(f"   Fetched {len(posts_on_page)} posts. Total so far: {len(all_posts)}")
 
+                for post in posts_on_page:
+                    try:
+                        post_time = datetime.fromisoformat(post['post']['record']['createdAt'].replace("Z", "+00:00"))
+                    except Exception:
+                        continue  # Skip malformed dates
+                    
+                    if start_time <= post_time <= end_time:
+                        all_posts.append(post)
+                        if max_posts and len(all_posts) >= max_posts:
+                            print("Reached requested number of posts.")
+                            return all_posts
+                    elif post_time < start_time:
+                        # We are past the desired range, no need to fetch further
+                        print("Reached posts older than start time. Stopping.")
+                        return all_posts
+
+                print(f"   Fetched {len(all_posts)} posts so far within time range.")
                 cursor = response.get('cursor')
                 if not cursor:
                     print("Reached the end of the feed.")
@@ -139,10 +160,11 @@ class BlueskySession:
                 time.sleep(1)
 
             except Exception as e:
-                print(f"An error occurred during fetching: {e}")
+                print(f"Error while fetching: {e}")
                 break
         
         return all_posts
+
 
 def search_and_select_user(session):
     """
@@ -212,8 +234,35 @@ if __name__ == "__main__":
             else:
                 print("Invalid choice. Please enter 1 or 2.")
 
+        # ----------------- Timestamp filter prompt -----------------
+        filter_choice = clean_input(input("\nDo you want to filter posts by timestamp? (y/n): ")).lower()
+        start_time, end_time, max_posts = None, None, None
+
+        if filter_choice == 'y':
+            from datetime import timezone
+            start_input = clean_input(input("Enter start timestamp (YYYY-MM-DD HH:MM:SS, blank for no limit): "))
+            end_input = clean_input(input("Enter end timestamp (YYYY-MM-DD HH:MM:SS, blank for no limit): "))
+            max_posts_input = clean_input(input("Enter max number of posts to fetch (blank for no limit): "))
+
+            try:
+                if start_input:
+                    start_time = datetime.strptime(start_input, "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone.utc)
+                if end_input:
+                    end_time = datetime.strptime(end_input, "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone.utc)
+                if max_posts_input:
+                    max_posts = int(max_posts_input)
+            except ValueError:
+                print("⚠️ Invalid date format. Please use YYYY-MM-DD HH:MM:SS")
+                exit(1)
+        # ------------------------------------------------------------
+
         if target_handle:
-            user_posts = session.get_all_user_posts(actor_handle=target_handle)
+            user_posts = session.get_all_user_posts(
+                actor_handle=target_handle,
+                start_time=start_time,
+                end_time=end_time,
+                max_posts=max_posts
+            )
             
             print(f"\n✨ --- Fetching Complete --- ✨")
             print(f"Total posts retrieved for @{target_handle}: {len(user_posts)}")

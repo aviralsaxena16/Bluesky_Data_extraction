@@ -4,6 +4,7 @@ import time
 import getpass
 import json
 from datetime import datetime
+from datetime import datetime, timedelta
 
 # --- Configuration ---
 BSKY_HOST = "https://bsky.social"
@@ -157,78 +158,105 @@ if __name__ == "__main__":
 
     session = BlueskySession(user_handle, app_password)
     if session.create_session():
-        
-        # --- Build the Search Query ---
         print("\n--- Build Your Search Query ---")
         
-        # 1. Get main search terms (including exact phrases)
         include_terms = clean_input(input('Enter search terms (you can use "quotes for exact phrases"): '))
-        
-        # 2. Get exclusion terms
         exclude_terms_raw = clean_input(input('Enter words to EXCLUDE (optional, separate with spaces): '))
         exclude_terms = [f"-{term.strip()}" for term in exclude_terms_raw.split() if term.strip()]
         
-        # 3. Combine into final query string
         final_query_parts = [include_terms] + exclude_terms
         final_query = " ".join(final_query_parts).strip()
         
         if not final_query:
             print("No search query provided. Exiting.")
-        else:
-            # 4. Get sort order
-            while True:
-                sort_choice = clean_input(input("Sort by [1] Top or [2] Latest? (Enter 1 or 2): "))
-                if sort_choice == '1':
-                    sort_order = 'top'
-                    break
-                elif sort_choice == '2':
-                    sort_order = 'latest'
+            exit()
+
+        while True:
+            sort_choice = clean_input(input("Sort by [1] Top or [2] Latest? (Enter 1 or 2): "))
+            if sort_choice == '1':
+                sort_order = 'top'
+                break
+            elif sort_choice == '2':
+                sort_order = 'latest'
+                break
+            else:
+                print("Invalid choice. Please enter 1 or 2.")
+        
+        while True:
+            try:
+                num_posts = int(input("How many posts do you want to fetch? (e.g., 500): "))
+                if num_posts > 0:
                     break
                 else:
-                    print("Invalid choice. Please enter 1 or 2.")
-            
-            # 5. Get number of posts to fetch
-            while True:
-                try:
-                    num_posts = int(input("How many posts do you want to fetch? (e.g., 500): "))
-                    if num_posts > 0: break
-                    else: print("Please enter a number greater than 0.")
-                except ValueError:
-                    print("Invalid input. Please enter a whole number.")
+                    print("Please enter a number greater than 0.")
+            except ValueError:
+                print("Invalid input. Please enter a whole number.")
 
-            # --- Fetch and Filter ---
-            fetched_posts = session.search_posts_advanced(final_query, sort_order, num_posts)
-            
-            # 6. Post-fetch language filter
-            final_posts = []
-            while True:
-                lang_choice = clean_input(input("\nFilter by language? (Enter 2-letter code like 'en', 'es', or leave blank for all): ")).lower()
-                if not lang_choice:
-                    final_posts = fetched_posts
-                    print("No language filter applied.")
-                    break
-                
-                for post in fetched_posts:
-                    record = post.get('record', {})
-                    langs = record.get('langs', [])
-                    if langs and lang_choice in langs:
-                        final_posts.append(post)
-                
-                print(f"Filtered down to {len(final_posts)} posts in language '{lang_choice}'.")
-                break
-            
-            # --- Save Results ---
-            print(f"\n✨ --- Processing Complete --- ✨")
-            print(f"Total posts to be saved: {len(final_posts)}")
+        fetched_posts = session.search_posts_advanced(final_query, sort_order, num_posts)
+        
+        final_posts = []
+        lang_choice = clean_input(input("\nFilter by language? (Enter 2-letter code like 'en', 'es', or leave blank for all): ")).lower()
+        if not lang_choice:
+            final_posts = fetched_posts
+            print("No language filter applied.")
+        else:
+            for post in fetched_posts:
+                record = post.get('record', {})
+                langs = record.get('langs', [])
+                if langs and lang_choice in langs:
+                    final_posts.append(post)
+            print(f"Filtered down to {len(final_posts)} posts in language '{lang_choice}'.")
+
+        print(f"\n✨ --- Processing Complete --- ✨")
+        print(f"Total posts after language filtering: {len(final_posts)}")
+
+        if final_posts:
+            ts_filter_choice = clean_input(input("\nDo you want date-based filtering? (yes/no): ")).lower()
+            if ts_filter_choice in ['yes', 'y']:
+                while True:
+                    try:
+                        lower_limit_str = clean_input(input("Enter LOWER date limit (YYYY-MM-DD) or press Enter for no limit: "))
+                        upper_limit_str = clean_input(input("Enter UPPER date limit (YYYY-MM-DD) or press Enter for no limit: "))
+
+                        # Only parse dates if user entered something
+                        if lower_limit_str:
+                            lower_limit = datetime.strptime(lower_limit_str, "%Y-%m-%d")
+                        else:
+                            lower_limit = datetime.min  # full past
+
+                        if upper_limit_str:
+                            upper_limit = datetime.strptime(upper_limit_str, "%Y-%m-%d") + timedelta(days=1) - timedelta(seconds=1)
+                        else:
+                            upper_limit = datetime.now()  # present time
+
+                        # Filter
+                        filtered_by_time = []
+                        for post in final_posts:
+                            created_at_str = post.get('record', {}).get('createdAt')
+                            if created_at_str:
+                                try:
+                                    post_time = datetime.strptime(created_at_str, "%Y-%m-%dT%H:%M:%S.%fZ")
+                                except ValueError:
+                                    post_time = datetime.strptime(created_at_str, "%Y-%m-%dT%H:%M:%SZ")
+                                
+                                if lower_limit <= post_time <= upper_limit:
+                                    filtered_by_time.append(post)
+
+                        print(f"📅 Date filter applied. Remaining posts: {len(filtered_by_time)}")
+                        final_posts = filtered_by_time
+                        break
+                    except ValueError:
+                        print("❌ Invalid date format. Please use YYYY-MM-DD.")
 
             if final_posts:
                 timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
                 safe_query = "".join(c for c in include_terms if c.isalnum() or c in (' ', '_')).rstrip()[:30]
                 filename = f"search_{safe_query.replace(' ', '_')}_{timestamp}.json"
-                
                 try:
                     with open(filename, 'w', encoding='utf-8') as f:
                         json.dump(final_posts, f, ensure_ascii=False, indent=4)
                     print(f"\n✅ Successfully saved {len(final_posts)} posts to '{filename}'")
                 except Exception as e:
                     print(f"\n❌ Failed to save posts to file. Error: {e}")
+            else:
+                print("⚠️ No posts left after date filtering. Nothing saved.")

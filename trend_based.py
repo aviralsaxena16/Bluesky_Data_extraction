@@ -4,7 +4,7 @@ import time
 import getpass
 import json
 from datetime import datetime
-
+from datetime import datetime, timezone
 # --- Configuration ---
 # The unique URI for the "What's Hot Classic" feed generator.
 # This is stable and can be used consistently.
@@ -161,6 +161,119 @@ class BlueskySession:
         
         return all_posts
 
+
+
+def parse_timestamp(ts_str):
+    """
+    Parse a timestamp string entered by the user.
+    Returns a datetime object in UTC timezone.
+    Accepts empty string (returns None).
+    """
+    if not ts_str.strip():
+        return None
+    try:
+        # Try user-friendly format first
+        dt = datetime.strptime(ts_str.strip(), "%Y-%m-%d %H:%M:%S")
+        return dt.replace(tzinfo=timezone.utc)
+    except ValueError:
+        try:
+            # Try ISO format
+            dt = datetime.fromisoformat(ts_str.strip().replace("Z", "+00:00"))
+            return dt.astimezone(timezone.utc)
+        except ValueError:
+            print("❌ Invalid date format. Please use 'YYYY-MM-DD HH:MM:SS' or ISO format.")
+            return None
+
+def get_filtered_whats_hot(self, max_posts, start_dt=None, end_dt=None):
+    """
+    Fetches up to `max_posts` posts from What's Hot Classic,
+    filtering by `record.createdAt` between start_dt and end_dt (both UTC datetimes).
+    """
+    print(f"\nFetching up to {max_posts} posts with timestamp filtering...")
+    all_posts = []
+    cursor = None
+
+    while len(all_posts) < max_posts:
+        limit = min(100, max_posts * 2)  # fetch extra to compensate for filtering
+        params = {"feed": WHATS_HOT_FEED_URI, "limit": limit}
+        if cursor:
+            params["cursor"] = cursor
+
+        try:
+            response = self._make_request("GET", "app.bsky.feed.getFeed", params=params)
+            posts_on_page = response.get('feed', [])
+            if not posts_on_page:
+                break
+
+            for item in posts_on_page:
+                post_time_str = item.get("post", {}).get("record", {}).get("createdAt")
+                if post_time_str:
+                    post_time = datetime.fromisoformat(post_time_str.replace("Z", "+00:00"))
+                    post_time = post_time.astimezone(timezone.utc)
+
+                    # Apply filtering
+                    if (start_dt is None or post_time >= start_dt) and \
+                       (end_dt is None or post_time <= end_dt):
+                        all_posts.append(item)
+                        if len(all_posts) >= max_posts:
+                            break
+
+            cursor = response.get('cursor')
+            if not cursor or len(all_posts) >= max_posts:
+                break
+            time.sleep(1)
+
+        except Exception as e:
+            print(f"Error fetching posts: {e}")
+            break
+
+    return all_posts
+
+# --- Integration into __main__ ---
+if __name__ == "__main__":
+    print("--- Bluesky Feed Fetcher ---")
+    user_handle = input("Enter your Bluesky handle: ")
+    app_password = input("Enter your App Password: ")
+
+    session = BlueskySession(user_handle, app_password)
+    if session.create_session():
+
+        filter_choice = input("Do you want to filter posts by timestamp? (y/n): ").strip().lower()
+        start_dt = end_dt = None
+
+        if filter_choice == "y":
+            while True:
+                start_input = input("Enter start timestamp (YYYY-MM-DD HH:MM:SS) or leave blank: ")
+                start_dt = parse_timestamp(start_input)
+                if start_input.strip() == "" or start_dt:
+                    break
+
+            while True:
+                end_input = input("Enter end timestamp (YYYY-MM-DD HH:MM:SS) or leave blank: ")
+                end_dt = parse_timestamp(end_input)
+                if end_input.strip() == "" or end_dt:
+                    break
+
+        while True:
+            try:
+                num_posts_to_fetch = int(input("Enter number of posts to fetch: "))
+                if num_posts_to_fetch > 0:
+                    break
+            except ValueError:
+                print("Invalid number.")
+
+        if filter_choice == "y":
+            posts = get_filtered_whats_hot(session, num_posts_to_fetch, start_dt, end_dt)
+        else:
+            posts = session.get_whats_hot_classic(num_posts_to_fetch)
+
+        print(f"\n✨ --- Fetching Complete --- ✨\nTotal posts retrieved: {len(posts)}")
+
+        if posts:
+            filename = f"Trends_bluesky_{datetime.now().strftime('%Y-%m-%d_%H-%M-%S')}.json"
+            with open(filename, 'w', encoding='utf-8') as f:
+                json.dump(posts, f, ensure_ascii=False, indent=4)
+            print(f"✅ Saved to '{filename}'")
 
 if __name__ == "__main__":
     # --- Main Execution ---
