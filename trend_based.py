@@ -308,10 +308,13 @@ if __name__ == "__main__":
 
         # 3. Save the data to a uniquely named JSON file
         if hot_posts:
-            # Create a unique filename with a timestamp
+    # Create a unique folder (and filename) with a timestamp
             timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-            filename = f"Trends_bluesky_{timestamp}.json"
-            
+            folder_name = os.path.join("results", f"run_{timestamp}")  # <-- new folder name
+            os.makedirs(folder_name, exist_ok=True)  # create folder if not exists
+
+            filename = os.path.join(folder_name, f"bluesky_results.json")  # file inside that folder
+
             try:
                 with open(filename, 'w', encoding='utf-8') as f:
                     json.dump(hot_posts, f, ensure_ascii=False, indent=4)

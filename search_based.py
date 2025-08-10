@@ -3,7 +3,6 @@ import os
 import time
 import getpass
 import json
-from datetime import datetime
 from datetime import datetime, timedelta
 
 # --- Configuration ---
@@ -79,11 +78,13 @@ class BlueskySession:
     def _make_request(self, method, xrpc_endpoint, params=None, json_data=None, headers=None, is_retry=False):
         """
         A generic, authenticated request handler that includes automatic token refresh logic.
+        (Compatible with Python < 3.8 — no walrus operator)
         """
         if not self.session_active:
             raise Exception("Session is not active. Please create a session first.")
 
-        if headers is None: headers = {}
+        if headers is None:
+            headers = {}
         headers["Authorization"] = f"Bearer {self.access_jwt}"
         full_url = f"{BSKY_HOST}/xrpc/{xrpc_endpoint}"
         
@@ -94,14 +95,18 @@ class BlueskySession:
                 return response.json()
             return None
         except requests.exceptions.HTTPError as e:
-            error_data = e.response.json()
-            if e.response.status_code == 400 and error_data.get('error') == 'ExpiredToken' and not is_retry:
-                if self._refresh_session():
-                    return self._make_request(method, xrpc_endpoint, params=params, json_data=json_data, headers=headers, is_retry=True)
+            resp = getattr(e, "response", None)
+            if resp is not None:
+                error_data = resp.json()
+                if resp.status_code == 400 and error_data.get('error') == 'ExpiredToken' and not is_retry:
+                    if self._refresh_session():
+                        return self._make_request(method, xrpc_endpoint, params=params, json_data=json_data, headers=headers, is_retry=True)
+                    else:
+                        raise e
                 else:
+                    print(f"❌ An API error occurred: {error_data.get('message')}")
                     raise e
             else:
-                print(f"❌ An API error occurred: {error_data.get('message')}")
                 raise e
 
     def search_posts_advanced(self, query, sort_order='latest', max_posts=1000):
@@ -116,7 +121,8 @@ class BlueskySession:
         
         while len(all_posts) < max_posts:
             limit = min(100, max_posts - len(all_posts))
-            if limit <= 0: break
+            if limit <= 0:
+                break
 
             params = {
                 "q": query,
@@ -215,48 +221,42 @@ if __name__ == "__main__":
             if ts_filter_choice in ['yes', 'y']:
                 while True:
                     try:
-                        lower_limit_str = clean_input(input("Enter LOWER date limit (YYYY-MM-DD) or press Enter for no limit: "))
-                        upper_limit_str = clean_input(input("Enter UPPER date limit (YYYY-MM-DD) or press Enter for no limit: "))
+                        lower_limit = datetime.min
+                        upper_limit = datetime.now()
 
-                        # Only parse dates if user entered something
+                        lower_limit_str = clean_input(input("Enter LOWER date limit (YYYY-MM-DD) or press Enter for no limit: ")).strip()
                         if lower_limit_str:
                             lower_limit = datetime.strptime(lower_limit_str, "%Y-%m-%d")
-                        else:
-                            lower_limit = datetime.min  # full past
 
+                        upper_limit_str = clean_input(input("Enter UPPER date limit (YYYY-MM-DD) or press Enter for no limit: ")).strip()
                         if upper_limit_str:
-                            upper_limit = datetime.strptime(upper_limit_str, "%Y-%m-%d") + timedelta(days=1) - timedelta(seconds=1)
-                        else:
-                            upper_limit = datetime.now()  # present time
+                            upper_limit = datetime.strptime(upper_limit_str, "%Y-%m-%d")
 
-                        # Filter
                         filtered_by_time = []
                         for post in final_posts:
                             created_at_str = post.get('record', {}).get('createdAt')
                             if created_at_str:
-                                try:
-                                    post_time = datetime.strptime(created_at_str, "%Y-%m-%dT%H:%M:%S.%fZ")
-                                except ValueError:
-                                    post_time = datetime.strptime(created_at_str, "%Y-%m-%dT%H:%M:%SZ")
-                                
-                                if lower_limit <= post_time <= upper_limit:
+                                post_date = datetime.strptime(created_at_str.split("T")[0], "%Y-%m-%d")
+                                if lower_limit.date() <= post_date.date() <= upper_limit.date():
                                     filtered_by_time.append(post)
 
                         print(f"📅 Date filter applied. Remaining posts: {len(filtered_by_time)}")
                         final_posts = filtered_by_time
                         break
-                    except ValueError:
-                        print("❌ Invalid date format. Please use YYYY-MM-DD.")
 
-            if final_posts:
-                timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-                safe_query = "".join(c for c in include_terms if c.isalnum() or c in (' ', '_')).rstrip()[:30]
-                filename = f"search_{safe_query.replace(' ', '_')}_{timestamp}.json"
-                try:
-                    with open(filename, 'w', encoding='utf-8') as f:
-                        json.dump(final_posts, f, ensure_ascii=False, indent=4)
-                    print(f"\n✅ Successfully saved {len(final_posts)} posts to '{filename}'")
-                except Exception as e:
-                    print(f"\n❌ Failed to save posts to file. Error: {e}")
-            else:
-                print("⚠️ No posts left after date filtering. Nothing saved.")
+                    except ValueError as ve:
+                        print(f"❌ Invalid date format: {ve}. Please use YYYY-MM-DD.")
+
+        # --- Save results to file ---
+        if final_posts:
+            import os
+            os.makedirs("results", exist_ok=True)
+            timestamp_str = datetime.now().strftime("%Y%m%d_%H%M%S")
+            output_file = os.path.join("results", f"bluesky_results_{timestamp_str}.json")
+
+            with open(output_file, "w", encoding="utf-8") as f:
+                json.dump(final_posts, f, indent=2, ensure_ascii=False)
+
+            print(f"\n💾 Results saved to: {output_file}")
+        else:
+            print("\n⚠️ No posts to save.")
