@@ -7,7 +7,6 @@ Features / fixes:
 - Automatic token refresh on 401/ExpiredToken
 - Better prompts & input cleaning
 - Pagination with cursor and polite rate limiting
-- Optional date filtering of posts by createdAt
 - Safer filename generation and clearer status messages
 - Handles cases where responses have no JSON payload
 """
@@ -17,7 +16,7 @@ import os
 import time
 import json
 import re
-from datetime import datetime, date
+from datetime import datetime
 
 # --- Configuration ---
 BSKY_HOST = "https://bsky.social"
@@ -254,80 +253,6 @@ def select_feed_from_list(feeds):
         except ValueError:
             print("Invalid input. Please enter a number.")
 
-def filter_posts_by_date(posts):
-    """
-    Ask user for lower/upper bounds and filter posts.
-    Expects posts to contain createdAt under post.record.createdAt or similar.
-    """
-    if not posts:
-        return posts
-
-    # collect dates available
-    dates = []
-    for p in posts:
-        ts = None
-        # try common shapes
-        try:
-            ts = (p.get('post') or {}).get('record', {}).get('createdAt')
-        except Exception:
-            ts = None
-        if not ts:
-            # fallback: if the entry itself is a record with createdAt
-            ts = (p.get('createdAt') or p.get('record', {}).get('createdAt')) if isinstance(p, dict) else None
-        if ts:
-            try:
-                # normalize to date
-                dt = datetime.strptime(ts[:10], "%Y-%m-%d").date()
-                dates.append(dt)
-            except Exception:
-                pass
-
-    if not dates:
-        print("⚠ No valid timestamps found in posts. Skipping date filtering.")
-        return posts
-
-    min_date = min(dates)
-    max_date = max(dates)
-    print(f"Available date range in feed: {min_date} → {max_date}")
-
-    lower_input = clean_input(input("Enter LOWER date limit (YYYY-MM-DD) or press Enter for no limit: "))
-    if lower_input:
-        try:
-            lower_limit = datetime.strptime(lower_input, "%Y-%m-%d").date()
-        except ValueError:
-            print("❌ Invalid date format. Using earliest available date.")
-            lower_limit = min_date
-    else:
-        lower_limit = min_date
-
-    upper_input = clean_input(input("Enter UPPER date limit (YYYY-MM-DD) or press Enter for no limit: "))
-    if upper_input:
-        try:
-            upper_limit = datetime.strptime(upper_input, "%Y-%m-%d").date()
-        except ValueError:
-            print("❌ Invalid date format. Using today's date.")
-            upper_limit = date.today()
-    else:
-        upper_limit = date.today()
-
-    filtered = []
-    for p in posts:
-        ts = (p.get('post') or {}).get('record', {}).get('createdAt') if isinstance(p, dict) else None
-        if not ts:
-            ts = p.get('createdAt') or (p.get('record', {}).get('createdAt') if isinstance(p.get('record'), dict) else None)
-        if not ts:
-            # skip posts without timestamps
-            continue
-        try:
-            post_date = datetime.strptime(ts[:10], "%Y-%m-%d").date()
-            if lower_limit <= post_date <= upper_limit:
-                filtered.append(p)
-        except Exception:
-            continue
-
-    print(f"✅ Posts after date filtering: {len(filtered)}")
-    return filtered
-
 def safe_filename(base: str):
     """Create a safe filename base (alphanumeric + underscores, trimmed)."""
     base = base or "feed"
@@ -407,11 +332,6 @@ if __name__ == "__main__":
     if not feed_posts:
         print("No posts retrieved. Exiting.")
         exit(0)
-
-    # Ask if user wants to filter by date
-    do_filter = clean_input(input("Would you like to filter the retrieved posts by date? (y/N): ")).lower()
-    if do_filter == 'y':
-        feed_posts = filter_posts_by_date(feed_posts)
 
     # Save to file
     timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
