@@ -1,17 +1,16 @@
+from datetime import datetime, timezone
 import requests
 import os
 import time
 import json
-from datetime import datetime
 from concurrent.futures import ThreadPoolExecutor
-import re
 
 # --- Configuration ---
 BSKY_HOST = "https://bsky.social"
 # Maximum number of comments to fetch for each post
-MAX_COMMENTS_PER_POST = 150
+MAX_COMMENTS_PER_POST = 150 
 # Number of parallel workers for fetching comments
-MAX_WORKERS = 10
+MAX_WORKERS = 10 
 
 def clean_input(input_string):
     """
@@ -125,20 +124,14 @@ class BlueskySession:
         Performs an advanced search for posts with pagination.
         """
         print(f"\nSearching for posts with query: '{query}' (sorted by {sort_order})")
+        print(f"Fetching up to {max_posts} posts...")
         
         all_posts = []
         cursor = None
         
-        while True:
-            # Determine the limit for the next request
-            limit = 100
-            if max_posts:
-                limit = min(100, max_posts - len(all_posts))
-            
-            if max_posts and len(all_posts) >= max_posts:
-                print("Reached requested number of posts.")
-                break
-            if max_posts and limit <= 0:
+        while len(all_posts) < max_posts:
+            limit = min(100, max_posts - len(all_posts))
+            if limit <= 0:
                 break
 
             params = {"q": query, "sort": sort_order, "limit": limit}
@@ -152,8 +145,12 @@ class BlueskySession:
                     print("No more posts found for this search. Halting.")
                     break
                 
+                # Initialize comments list for each post
+                for post in posts_on_page:
+                    post['comments'] = []
+                
                 all_posts.extend(posts_on_page)
-                print(f"   Fetched {len(all_posts)} posts so far...")
+                print(f"   Fetched {len(posts_on_page)} posts. Total so far: {len(all_posts)}")
 
                 cursor = response.get('cursor')
                 if not cursor:
@@ -173,7 +170,7 @@ def fetch_comments_and_replies(post_item):
     """
     Wrapper function for threading. Fetches comments and replies for a single post.
     """
-    post_uri = post_item.get('post', {}).get('uri')
+    post_uri = post_item.get('uri') # Search results have a different structure
     if not post_uri:
         return post_item
 
@@ -195,8 +192,9 @@ def fetch_comments_and_replies(post_item):
 
     return post_item
 
+
 if __name__ == "__main__":
-    print("--- Bluesky Search Tool (Upgraded) ---")
+    print("--- Bluesky Advanced Discovery Tool (Upgraded) ---")
     
     user_handle = clean_input(input("Enter your Bluesky handle: "))
     app_password = clean_input(input("Enter your App Password: "))
@@ -221,54 +219,82 @@ if __name__ == "__main__":
         while True:
             sort_choice = clean_input(input("Sort by [1] Top or [2] Latest? (Enter 1 or 2): "))
             if sort_choice == '1':
-                sort_order = 'top'; break
+                sort_order = 'top'
+                break
             elif sort_choice == '2':
-                sort_order = 'latest'; break
+                sort_order = 'latest'
+                break
             else:
                 print("Invalid choice. Please enter 1 or 2.")
         
-        max_posts_input = clean_input(input("Enter max number of posts to fetch (e.g., 500, or blank for all): "))
-        max_posts = int(max_posts_input) if max_posts_input.isdigit() else None
+        num_posts_input = clean_input(input("How many posts do you want to fetch? (e.g., 500): "))
+        num_posts = int(num_posts_input) if num_posts_input.isdigit() else 500
 
         print("\n--- Starting Benchmark ---")
         total_start_time = time.time()
 
         # --- 1. Fetching Posts ---
         post_fetch_start = time.time()
-        fetched_posts = session.search_posts_advanced(final_query, sort_order, max_posts)
+        fetched_posts = session.search_posts_advanced(final_query, sort_order, num_posts)
         post_fetch_end = time.time()
         print(f"--- 📊 Fetched {len(fetched_posts)} posts in {post_fetch_end - post_fetch_start:.2f} seconds ---")
 
-        # --- 2. Fetching Comments in Parallel ---
-        if fetched_posts:
-            # Prepare data for the new structure
-            posts_with_comments_placeholder = [{'post': post, 'comments': []} for post in fetched_posts]
+        # --- 2. Filtering ---
+        final_posts = []
+        lang_choice = clean_input(input("\nFilter by language? (Enter 2-letter code like 'en', 'es', or leave blank for all): ")).lower()
+        if not lang_choice:
+            final_posts = fetched_posts
+        else:
+            for post in fetched_posts:
+                langs = post.get('record', {}).get('langs', [])
+                if langs and lang_choice in langs:
+                    final_posts.append(post)
+            print(f"Filtered down to {len(final_posts)} posts in language '{lang_choice}'.")
 
-            print(f"\nFetching comments for {len(posts_with_comments_placeholder)} posts using {MAX_WORKERS} parallel workers...")
+        # --- RE-ADDED: Timestamp / Date Filtering ---
+        ts_filter_choice = clean_input(input("\nDo you want to filter by date? (y/n): ")).lower()
+        if ts_filter_choice == 'y':
+            try:
+                lower_limit_str = clean_input(input("Enter start date (YYYY-MM-DD, blank for no limit): ")).strip()
+                upper_limit_str = clean_input(input("Enter end date (YYYY-MM-DD, blank for no limit): ")).strip()
+
+                lower_limit = datetime.strptime(lower_limit_str, "%Y-%m-%d") if lower_limit_str else datetime.min
+                upper_limit = datetime.strptime(upper_limit_str, "%Y-%m-%d") if upper_limit_str else datetime.max
+
+                filtered_by_time = []
+                for post in final_posts:
+                    created_at_str = post.get('record', {}).get('createdAt')
+                    if created_at_str:
+                        post_date = datetime.fromisoformat(created_at_str.replace("Z", "+00:00"))
+                        if lower_limit.date() <= post_date.date() <= upper_limit.date():
+                            filtered_by_time.append(post)
+                
+                print(f"Filtered down to {len(filtered_by_time)} posts by date.")
+                final_posts = filtered_by_time
+            except ValueError:
+                print("⚠️ Invalid date format. Please use YYYY-MM-DD.")
+
+        # --- 3. Fetching Comments in Parallel ---
+        if final_posts:
+            print(f"\nFetching comments for {len(final_posts)} posts using {MAX_WORKERS} parallel workers...")
             comment_fetch_start = time.time()
-            
             with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
-                results = list(executor.map(fetch_comments_and_replies, posts_with_comments_placeholder))
-            
+                results = list(executor.map(fetch_comments_and_replies, final_posts))
             comment_fetch_end = time.time()
             print(f"--- 📊 Fetched comments in {comment_fetch_end - comment_fetch_start:.2f} seconds ---")
-            
             final_posts = results
-        else:
-            final_posts = []
 
         total_end_time = time.time()
         print(f"\n✨ --- Total Execution Time: {total_end_time - total_start_time:.2f} seconds --- ✨")
-        
-        # --- 3. Saving Results ---
+
+        # --- 4. Saving Results ---
         if final_posts:
             timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-            # Create a safe filename from the query
-            safe_query = re.sub(r'[^a-zA-Z0-9_]', '', final_query.replace(" ", "_"))[:30]
+            safe_query = "".join(c for c in final_query if c.isalnum() or c in (' ', '_')).rstrip()
+            safe_query = safe_query.replace(' ', '_')[:30]
 
             output_dir = "search_model"
             os.makedirs(output_dir, exist_ok=True)
-
             filename = os.path.join(output_dir, f"search_{safe_query}_{timestamp}.json")
             
             print(f"\nSaving {len(final_posts)} posts with comments to '{filename}'...")
@@ -278,5 +304,3 @@ if __name__ == "__main__":
                 print(f"\n✅ Successfully saved results.")
             except Exception as e:
                 print(f"\n❌ Failed to save posts to file. Error: {e}")
-        else:
-            print("\n⚠️ No posts found or fetched to save.")
