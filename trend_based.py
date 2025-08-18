@@ -1,15 +1,23 @@
+from datetime import datetime, timezone
 import requests
 import os
 import time
-import getpass
 import json
-from datetime import datetime
-from datetime import datetime, timezone
+from concurrent.futures import ThreadPoolExecutor
+
 # --- Configuration ---
-# The unique URI for the "What's Hot Classic" feed generator.
-# This is stable and can be used consistently.
-WHATS_HOT_FEED_URI = "at://did:plc:z72i7hdynmk6r22z27h6tvur/app.bsky.feed.generator/whats-hot"
 BSKY_HOST = "https://bsky.social"
+WHATS_HOT_FEED_URI = "at://did:plc:z72i7hdynmk6r22z27h6tvur/app.bsky.feed.generator/whats-hot"
+# Maximum number of comments to fetch for each post
+MAX_COMMENTS_PER_POST = 150 
+# Number of parallel workers for fetching comments
+MAX_WORKERS = 10 
+
+def clean_input(input_string):
+    """
+    A robust function to remove all non-printable characters from a string.
+    """
+    return ''.join(filter(str.isprintable, input_string))
 
 class BlueskySession:
     """
@@ -26,18 +34,14 @@ class BlueskySession:
     def create_session(self):
         """
         Creates an initial session with the Bluesky server.
-        Must be called once before making other authenticated requests.
         """
         print("Attempting to create a session...")
         try:
             response = requests.post(
                 f"{BSKY_HOST}/xrpc/com.atproto.server.createSession",
-                json={
-                    "identifier": self._handle,
-                    "password": self._password,
-                },
+                json={"identifier": self._handle, "password": self._password},
             )
-            response.raise_for_status()  # Raise an exception for bad status codes (4xx or 5xx)
+            response.raise_for_status()
             data = response.json()
             self.access_jwt = data['accessJwt']
             self.refresh_jwt = data['refreshJwt']
@@ -53,7 +57,6 @@ class BlueskySession:
     def _refresh_session(self):
         """
         Uses the refresh token to get a new access token.
-        This method is called automatically when a token expires.
         """
         print("\n⚠️ Access token expired. Refreshing session...")
         if not self.refresh_jwt:
@@ -69,81 +72,82 @@ class BlueskySession:
             response.raise_for_status()
             data = response.json()
             self.access_jwt = data['accessJwt']
-            self.refresh_jwt = data['refreshJwt'] # The server might issue a new refresh token
+            self.refresh_jwt = data['refreshJwt']
             print("✅ Session refreshed successfully.")
             return True
         except requests.exceptions.HTTPError as e:
             print(f"❌ Failed to refresh session. Status Code: {e.response.status_code}")
-            print(f"   Error: {e.response.json().get('message', 'Refresh failed.')}")
             self.session_active = False
             return False
 
-    def _make_request(self, method, xrpc_endpoint, params=None, headers=None, is_retry=False):
+    def _make_request(self, method, xrpc_endpoint, params=None, json_data=None, headers=None, is_retry=False):
         """
         A generic, authenticated request handler that includes automatic token refresh logic.
         """
         if not self.session_active:
             raise Exception("Session is not active. Please create a session first.")
 
-        if headers is None:
-            headers = {}
-        
-        # Add the current access token to the request
+        if headers is None: headers = {}
         headers["Authorization"] = f"Bearer {self.access_jwt}"
-
         full_url = f"{BSKY_HOST}/xrpc/{xrpc_endpoint}"
         
         try:
-            response = requests.request(method, full_url, params=params, headers=headers)
+            response = requests.request(method, full_url, params=params, json=json_data, headers=headers)
             response.raise_for_status()
-            return response.json()
+            if response.content:
+                return response.json()
+            return None
         except requests.exceptions.HTTPError as e:
-            # Check if the error is due to an expired token
             error_data = e.response.json()
             if e.response.status_code == 400 and error_data.get('error') == 'ExpiredToken' and not is_retry:
-                # Token expired, try to refresh and retry the request once.
                 if self._refresh_session():
-                    return self._make_request(method, xrpc_endpoint, params=params, headers=headers, is_retry=True)
+                    return self._make_request(method, xrpc_endpoint, params=params, json_data=json_data, headers=headers, is_retry=True)
                 else:
-                    # Refresh failed, re-raise the original exception
                     raise e
             else:
-                # It was a different error, so just raise it
                 print(f"❌ An API error occurred: {error_data.get('message')}")
                 raise e
 
+    def get_post_thread(self, post_uri):
+        """
+        Fetches a post's full thread, including comments and their replies.
+        """
+        try:
+            params = {"uri": post_uri, "depth": 2} # Depth 2 gets comments and their replies
+            data = self._make_request("GET", "app.bsky.feed.getPostThread", params=params)
+            return data.get('thread', {})
+        except Exception as e:
+            print(f"Error fetching thread for {post_uri}: {e}")
+            return None
+
     def get_whats_hot_classic(self, max_posts):
         """
-        Fetches a large number of posts from the 'What's Hot Classic' feed
-        using pagination.
+        Fetches posts from the 'What's Hot Classic' feed using pagination.
         """
         print(f"\nFetching up to {max_posts} posts from 'What's Hot Classic'...")
         all_posts = []
         cursor = None
         
         while len(all_posts) < max_posts:
-            # Set the limit for this page, ensuring we don't fetch more than max_posts
             limit = min(100, max_posts - len(all_posts))
             if limit <= 0:
                 break
             
-            params = {
-                "feed": WHATS_HOT_FEED_URI,
-                "limit": limit,
-            }
+            params = {"feed": WHATS_HOT_FEED_URI, "limit": limit}
             if cursor:
                 params["cursor"] = cursor
 
             try:
-                # This specific request does not require authentication, but we use
-                # the authenticated request handler for consistency and future-proofing.
                 response = self._make_request("GET", "app.bsky.feed.getFeed", params=params)
-                
                 posts_on_page = response.get('feed', [])
                 if not posts_on_page:
                     print("No more posts found in the feed. Halting.")
                     break
                 
+                # Initialize comments list for each post
+                for post in posts_on_page:
+                    post['comments'] = []
+
                 all_posts.extend(posts_on_page)
                 print(f"   Fetched {len(posts_on_page)} posts. Total so far: {len(all_posts)}")
 
@@ -152,8 +156,7 @@ class BlueskySession:
                     print("Reached the end of the feed.")
                     break
                 
-                # Be a good citizen and don't spam the API too quickly
-                time.sleep(1)
+                time.sleep(0.5) # Polite delay
 
             except Exception as e:
                 print(f"An error occurred during fetching: {e}")
@@ -161,173 +164,111 @@ class BlueskySession:
         
         return all_posts
 
-
-
-def parse_timestamp(ts_str):
+# This function will be run in parallel for each post
+def fetch_comments_and_replies(post_item):
     """
-    Parse a timestamp string entered by the user.
-    Returns a datetime object in UTC timezone.
-    Accepts empty string (returns None).
+    Wrapper function for threading. Fetches comments and replies for a single post.
     """
-    if not ts_str.strip():
-        return None
-    try:
-        # Try user-friendly format first
-        dt = datetime.strptime(ts_str.strip(), "%Y-%m-%d %H:%M:%S")
-        return dt.replace(tzinfo=timezone.utc)
-    except ValueError:
-        try:
-            # Try ISO format
-            dt = datetime.fromisoformat(ts_str.strip().replace("Z", "+00:00"))
-            return dt.astimezone(timezone.utc)
-        except ValueError:
-            print("❌ Invalid date format. Please use 'YYYY-MM-DD HH:MM:SS' or ISO format.")
-            return None
+    post_uri = post_item.get('post', {}).get('uri')
+    if not post_uri:
+        return post_item
 
-def get_filtered_whats_hot(self, max_posts, start_dt=None, end_dt=None):
-    """
-    Fetches up to `max_posts` posts from What's Hot Classic,
-    filtering by `record.createdAt` between start_dt and end_dt (both UTC datetimes).
-    """
-    print(f"\nFetching up to {max_posts} posts with timestamp filtering...")
-    all_posts = []
-    cursor = None
-
-    while len(all_posts) < max_posts:
-        limit = min(100, max_posts * 2)  # fetch extra to compensate for filtering
-        params = {"feed": WHATS_HOT_FEED_URI, "limit": limit}
-        if cursor:
-            params["cursor"] = cursor
-
-        try:
-            response = self._make_request("GET", "app.bsky.feed.getFeed", params=params)
-            posts_on_page = response.get('feed', [])
-            if not posts_on_page:
-                break
-
-            for item in posts_on_page:
-                post_time_str = item.get("post", {}).get("record", {}).get("createdAt")
-                if post_time_str:
-                    post_time = datetime.fromisoformat(post_time_str.replace("Z", "+00:00"))
-                    post_time = post_time.astimezone(timezone.utc)
-
-                    # Apply filtering
-                    if (start_dt is None or post_time >= start_dt) and \
-                       (end_dt is None or post_time <= end_dt):
-                        all_posts.append(item)
-                        if len(all_posts) >= max_posts:
-                            break
-
-            cursor = response.get('cursor')
-            if not cursor or len(all_posts) >= max_posts:
-                break
-            time.sleep(1)
-
-        except Exception as e:
-            print(f"Error fetching posts: {e}")
-            break
-
-    return all_posts
-
-# --- Integration into __main__ ---
-if __name__ == "__main__":
-    print("--- Bluesky Feed Fetcher ---")
-    user_handle = input("Enter your Bluesky handle: ")
-    app_password = input("Enter your App Password: ")
-
-    session = BlueskySession(user_handle, app_password)
-    if session.create_session():
-
-        filter_choice = input("Do you want to filter posts by timestamp? (y/n): ").strip().lower()
-        start_dt = end_dt = None
-
-        if filter_choice == "y":
-            while True:
-                start_input = input("Enter start timestamp (YYYY-MM-DD HH:MM:SS) or leave blank: ")
-                start_dt = parse_timestamp(start_input)
-                if start_input.strip() == "" or start_dt:
-                    break
-
-            while True:
-                end_input = input("Enter end timestamp (YYYY-MM-DD HH:MM:SS) or leave blank: ")
-                end_dt = parse_timestamp(end_input)
-                if end_input.strip() == "" or end_dt:
-                    break
-
-        while True:
-            try:
-                num_posts_to_fetch = int(input("Enter number of posts to fetch: "))
-                if num_posts_to_fetch > 0:
-                    break
-            except ValueError:
-                print("Invalid number.")
-
-        if filter_choice == "y":
-            posts = get_filtered_whats_hot(session, num_posts_to_fetch, start_dt, end_dt)
-        else:
-            posts = session.get_whats_hot_classic(num_posts_to_fetch)
-
-        print(f"\n✨ --- Fetching Complete --- ✨\nTotal posts retrieved: {len(posts)}")
-
-        if posts:
-            filename = f"Trends_bluesky_{datetime.now().strftime('%Y-%m-%d_%H-%M-%S')}.json"
-            with open(filename, 'w', encoding='utf-8') as f:
-                json.dump(posts, f, ensure_ascii=False, indent=4)
-            print(f"✅ Saved to '{filename}'")
-
-if __name__ == "__main__":
-    # --- Main Execution ---
-    print("--- Bluesky Feed Fetcher ---")
+    print(f"   Fetching comments for post: {post_uri.split('/')[-1]}")
+    thread = session.get_post_thread(post_uri)
     
-    # Securely get user credentials
-    user_handle = input("Enter your Bluesky handle (e.g., yourname.bsky.social): ")
-    # IMPORTANT: For security, it is highly recommended to use an App Password.
-    # You can create one in Bluesky under Settings -> App Passwords.
-    app_password = input("Enter your App Password (will be visible): ")
+    if thread and 'replies' in thread:
+        top_level_comments = thread['replies']
+        
+        for comment_thread in top_level_comments[:MAX_COMMENTS_PER_POST]:
+            comment_post = comment_thread.get('post', {})
+            structured_comment = {"post": comment_post, "replies": []}
 
-    # 1. Create a session instance and log in
+            if 'replies' in comment_thread:
+                for reply_thread in comment_thread['replies']:
+                    structured_comment["replies"].append(reply_thread.get('post', {}))
+            
+            post_item['comments'].append(structured_comment)
+
+    return post_item
+
+
+if __name__ == "__main__":
+    print("--- Bluesky Trending Feed Archiver (Upgraded) ---")
+    
+    user_handle = clean_input(input("Enter your Bluesky handle: "))
+    app_password = clean_input(input("Enter your App Password: "))
+
+    global session
     session = BlueskySession(user_handle, app_password)
+
     if session.create_session():
-        
-        # NEW: Ask user for the number of posts to fetch
-        while True:
+        num_posts_input = clean_input(input("How many trending posts do you want to fetch? (e.g., 500): "))
+        num_posts = int(num_posts_input) if num_posts_input.isdigit() else 500
+
+        # --- Timestamp Filtering ---
+        start_time, end_time = None, None
+        filter_choice = clean_input(input("\nDo you want to filter posts by timestamp? (y/n): ")).lower()
+        if filter_choice == 'y':
             try:
-                num_posts_to_fetch = int(input("Enter the total number of posts you want to fetch: "))
-                if num_posts_to_fetch > 0:
-                    break
-                else:
-                    print("Please enter a number greater than 0.")
+                start_input = clean_input(input("Enter start timestamp (YYYY-MM-DD HH:MM:SS, blank for no limit): "))
+                end_input = clean_input(input("Enter end timestamp (YYYY-MM-DD HH:MM:SS, blank for no limit): "))
+                if start_input:
+                    start_time = datetime.strptime(start_input, "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone.utc)
+                if end_input:
+                    end_time = datetime.strptime(end_input, "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone.utc)
             except ValueError:
-                print("Invalid input. Please enter a whole number.")
-
-        # 2. Fetch posts from the feed based on user input
-        hot_posts = session.get_whats_hot_classic(max_posts=num_posts_to_fetch)
+                print("⚠️ Invalid date format. Please use YYYY-MM-DD HH:MM:SS. Aborting.")
+                exit(1)
         
-        print(f"\n✨ --- Fetching Complete --- ✨")
-        print(f"Total posts retrieved: {len(hot_posts)}")
+        print("\n--- Starting Benchmark ---")
+        total_start_time = time.time()
 
-        # 3. Save the data to a uniquely named JSON file
-        if hot_posts:
-    # Create a unique folder (and filename) with a timestamp
+        # --- 1. Fetching Posts ---
+        post_fetch_start = time.time()
+        hot_posts = session.get_whats_hot_classic(max_posts=num_posts)
+        post_fetch_end = time.time()
+        print(f"--- 📊 Fetched {len(hot_posts)} initial posts in {post_fetch_end - post_fetch_start:.2f} seconds ---")
+
+        # --- 2. Filtering Posts by Timestamp ---
+        final_posts = []
+        if filter_choice == 'y':
+            print("\nFiltering posts by timestamp...")
+            for post in hot_posts:
+                created_at_str = post.get('post', {}).get('record', {}).get('createdAt')
+                if created_at_str:
+                    post_time = datetime.fromisoformat(created_at_str.replace("Z", "+00:00"))
+                    if (start_time is None or post_time >= start_time) and \
+                       (end_time is None or post_time <= end_time):
+                        final_posts.append(post)
+            print(f"--- Filtered down to {len(final_posts)} posts in the selected time range. ---")
+        else:
+            final_posts = hot_posts
+
+        # --- 3. Fetching Comments in Parallel ---
+        if final_posts:
+            print(f"\nFetching comments for {len(final_posts)} posts using {MAX_WORKERS} parallel workers...")
+            comment_fetch_start = time.time()
+            with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
+                results = list(executor.map(fetch_comments_and_replies, final_posts))
+            comment_fetch_end = time.time()
+            print(f"--- 📊 Fetched comments in {comment_fetch_end - comment_fetch_start:.2f} seconds ---")
+            final_posts = results
+
+        total_end_time = time.time()
+        print(f"\n✨ --- Total Execution Time: {total_end_time - total_start_time:.2f} seconds --- ✨")
+
+        # --- 4. Saving Results ---
+        if final_posts:
             timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-            folder_name = os.path.join("results", f"run_{timestamp}")  # <-- new folder name
-            os.makedirs(folder_name, exist_ok=True)  # create folder if not exists
-
-            filename = os.path.join(folder_name, f"bluesky_results.json")  # file inside that folder
-
+            
+            output_dir = "trending_model"
+            os.makedirs(output_dir, exist_ok=True)
+            filename = os.path.join(output_dir, f"trending_whats-hot_{timestamp}.json")
+            
+            print(f"\nSaving {len(final_posts)} posts with comments to '{filename}'...")
             try:
                 with open(filename, 'w', encoding='utf-8') as f:
-                    json.dump(hot_posts, f, ensure_ascii=False, indent=4)
-                print(f"\n✅ Successfully saved {len(hot_posts)} posts to '{filename}'")
+                    json.dump(final_posts, f, ensure_ascii=False, indent=2)
+                print(f"\n✅ Successfully saved results.")
             except Exception as e:
-                print(f"\n❌ Failed to save posts to file.54 Error: {e}")
-
-        # 4. Display a few examples
-        if hot_posts:
-            print("\nHere are the first 3 posts retrieved:")
-            for i, item in enumerate(hot_posts[:3]):
-                post = item.get('post', {})
-                author = post.get('author', {})
-                record = post.get('record', {})
-                text = record.get('text', '[No Text]').replace('\n', ' ')
-                print(f"  {i+1}. @{author.get('handle', 'unknown')}: \"{text[:100]}...\"")
+                print(f"\n❌ Failed to save posts to file. Error: {e}")
