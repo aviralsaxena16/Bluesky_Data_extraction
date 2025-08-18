@@ -320,7 +320,7 @@ if __name__ == "__main__":
                     json.dump(hot_posts, f, ensure_ascii=False, indent=4)
                 print(f"\n✅ Successfully saved {len(hot_posts)} posts to '{filename}'")
             except Exception as e:
-                print(f"\n❌ Failed to save posts to file. Error: {e}")
+                print(f"\n❌ Failed to save posts to file.54 Error: {e}")
 
         # 4. Display a few examples
         if hot_posts:
