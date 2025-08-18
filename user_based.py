@@ -8,7 +8,7 @@ from concurrent.futures import ThreadPoolExecutor
 # --- Configuration ---
 BSKY_HOST = "https://bsky.social"
 # Maximum number of comments to fetch for each post
-MAX_COMMENTS_PER_POST = 100 
+MAX_COMMENTS_PER_POST = 150 
 # Number of parallel workers for fetching comments
 MAX_WORKERS = 10 
 
@@ -279,6 +279,22 @@ if __name__ == "__main__":
             else:
                 print("Invalid choice. Please enter 1 or 2.")
 
+        # --- NEW: Timestamp filter prompt re-added ---
+        start_time, end_time = None, None
+        filter_choice = clean_input(input("\nDo you want to filter posts by timestamp? (y/n): ")).lower()
+        if filter_choice == 'y':
+            start_input = clean_input(input("Enter start timestamp (YYYY-MM-DD HH:MM:SS, blank for no limit): "))
+            end_input = clean_input(input("Enter end timestamp (YYYY-MM-DD HH:MM:SS, blank for no limit): "))
+            try:
+                if start_input:
+                    start_time = datetime.strptime(start_input, "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone.utc)
+                if end_input:
+                    end_time = datetime.strptime(end_input, "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone.utc)
+            except ValueError:
+                print("⚠️ Invalid date format. Please use YYYY-MM-DD HH:MM:SS. Aborting.")
+                exit(1)
+        # --- End of new section ---
+
         max_posts_input = clean_input(input("Enter max number of posts to fetch (e.g., 300, 500, 1000, or blank for all): "))
         max_posts = int(max_posts_input) if max_posts_input.isdigit() else None
 
@@ -290,6 +306,8 @@ if __name__ == "__main__":
             post_fetch_start = time.time()
             user_posts = session.get_all_user_posts(
                 actor_handle=target_handle,
+                start_time=start_time, # Pass the timestamp filter
+                end_time=end_time,     # Pass the timestamp filter
                 max_posts=max_posts
             )
             post_fetch_end = time.time()
