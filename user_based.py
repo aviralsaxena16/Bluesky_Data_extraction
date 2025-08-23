@@ -220,7 +220,6 @@ def fetch_comments_and_replies(post_item):
     """
     Wrapper function for threading. Fetches comments and replies for a single post.
     """
-    # We need to access the session object, which we'll define globally in the main block
     post_uri = post_item.get('post', {}).get('uri')
     if not post_uri:
         return post_item
@@ -229,20 +228,16 @@ def fetch_comments_and_replies(post_item):
     thread = session.get_post_thread(post_uri)
     
     if thread and 'replies' in thread:
-        # These are the top-level comments
         top_level_comments = thread['replies']
         
-        # Limit the number of comments to process
         for comment_thread in top_level_comments[:MAX_COMMENTS_PER_POST]:
             comment_post = comment_thread.get('post', {})
             
-            # This is our new structured comment object
             structured_comment = {
                 "post": comment_post,
                 "replies": []
             }
 
-            # Check for replies to this comment
             if 'replies' in comment_thread:
                 for reply_thread in comment_thread['replies']:
                     structured_comment["replies"].append(reply_thread.get('post', {}))
@@ -258,7 +253,6 @@ if __name__ == "__main__":
     user_handle = clean_input(input("Enter your Bluesky handle (e.g., yourname.bsky.social): "))
     app_password = clean_input(input("Enter your App Password (will be visible): "))
 
-    # Make the session object accessible to the thread worker function
     global session
     session = BlueskySession(user_handle, app_password)
 
@@ -279,7 +273,6 @@ if __name__ == "__main__":
             else:
                 print("Invalid choice. Please enter 1 or 2.")
 
-        # --- NEW: Timestamp filter prompt re-added ---
         start_time, end_time = None, None
         filter_choice = clean_input(input("\nDo you want to filter posts by timestamp? (y/n): ")).lower()
         if filter_choice == 'y':
@@ -293,7 +286,6 @@ if __name__ == "__main__":
             except ValueError:
                 print("⚠️ Invalid date format. Please use YYYY-MM-DD HH:MM:SS. Aborting.")
                 exit(1)
-        # --- End of new section ---
 
         max_posts_input = clean_input(input("Enter max number of posts to fetch (e.g., 300, 500, 1000, or blank for all): "))
         max_posts = int(max_posts_input) if max_posts_input.isdigit() else None
@@ -306,12 +298,22 @@ if __name__ == "__main__":
             post_fetch_start = time.time()
             user_posts = session.get_all_user_posts(
                 actor_handle=target_handle,
-                start_time=start_time, # Pass the timestamp filter
-                end_time=end_time,     # Pass the timestamp filter
+                start_time=start_time,
+                end_time=end_time,
                 max_posts=max_posts
             )
             post_fetch_end = time.time()
             print(f"--- 📊 Fetched {len(user_posts)} posts in {post_fetch_end - post_fetch_start:.2f} seconds ---")
+
+            # --- NEW: Add clickable URL to each post ---
+            print("\nGenerating clickable URLs for posts...")
+            for item in user_posts:
+                post_data = item.get('post', {})
+                author_handle = post_data.get('author', {}).get('handle')
+                post_uri = post_data.get('uri')
+                if author_handle and post_uri:
+                    post_id = post_uri.split('/')[-1]
+                    item['post']['post_url'] = f"https://bsky.app/profile/{author_handle}/post/{post_id}"
 
             # --- 2. Fetching Comments in Parallel ---
             if user_posts:
@@ -319,13 +321,12 @@ if __name__ == "__main__":
                 comment_fetch_start = time.time()
                 
                 with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
-                    # executor.map will apply the function to each post and return an iterator of results
                     results = list(executor.map(fetch_comments_and_replies, user_posts))
                 
                 comment_fetch_end = time.time()
                 print(f"--- 📊 Fetched comments in {comment_fetch_end - comment_fetch_start:.2f} seconds ---")
                 
-                user_posts = results # Update user_posts with the new data including comments
+                user_posts = results
 
             total_end_time = time.time()
             print(f"\n✨ --- Total Execution Time: {total_end_time - total_start_time:.2f} seconds --- ✨")
@@ -335,11 +336,9 @@ if __name__ == "__main__":
                 timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
                 safe_handle = target_handle.replace('.', '_')
                 
-                # Create the directory structure
                 output_dir = "user_model"
                 os.makedirs(output_dir, exist_ok=True)
 
-                # Define the full file path
                 filename = os.path.join(output_dir, f"posts_{safe_handle}_{timestamp}.json")
                 
                 print(f"\nSaving {len(user_posts)} posts with comments to '{filename}'...")
