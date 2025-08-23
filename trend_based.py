@@ -144,7 +144,6 @@ class BlueskySession:
                     print("No more posts found in the feed. Halting.")
                     break
                 
-                # Initialize comments list for each post
                 for post in posts_on_page:
                     post['comments'] = []
 
@@ -205,7 +204,6 @@ if __name__ == "__main__":
         num_posts_input = clean_input(input("How many trending posts do you want to fetch? (e.g., 500): "))
         num_posts = int(num_posts_input) if num_posts_input.isdigit() else 500
 
-        # --- Timestamp Filtering ---
         start_time, end_time = None, None
         filter_choice = clean_input(input("\nDo you want to filter posts by timestamp? (y/n): ")).lower()
         if filter_choice == 'y':
@@ -243,6 +241,16 @@ if __name__ == "__main__":
             print(f"--- Filtered down to {len(final_posts)} posts in the selected time range. ---")
         else:
             final_posts = hot_posts
+            
+        # --- NEW: Add clickable URL to each post ---
+        print("\nGenerating clickable URLs for posts...")
+        for item in final_posts:
+            post_data = item.get('post', {})
+            author_handle = post_data.get('author', {}).get('handle')
+            post_uri = post_data.get('uri')
+            if author_handle and post_uri:
+                post_id = post_uri.split('/')[-1]
+                item['post']['post_url'] = f"https://bsky.app/profile/{author_handle}/post/{post_id}"
 
         # --- 3. Fetching Comments in Parallel ---
         if final_posts:
