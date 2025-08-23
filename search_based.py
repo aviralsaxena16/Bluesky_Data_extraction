@@ -145,7 +145,6 @@ class BlueskySession:
                     print("No more posts found for this search. Halting.")
                     break
                 
-                # Initialize comments list for each post
                 for post in posts_on_page:
                     post['comments'] = []
                 
@@ -251,7 +250,6 @@ if __name__ == "__main__":
                     final_posts.append(post)
             print(f"Filtered down to {len(final_posts)} posts in language '{lang_choice}'.")
 
-        # --- RE-ADDED: Timestamp / Date Filtering ---
         ts_filter_choice = clean_input(input("\nDo you want to filter by date? (y/n): ")).lower()
         if ts_filter_choice == 'y':
             try:
@@ -273,6 +271,16 @@ if __name__ == "__main__":
                 final_posts = filtered_by_time
             except ValueError:
                 print("⚠️ Invalid date format. Please use YYYY-MM-DD.")
+        
+        # --- NEW: Add clickable URL to each post ---
+        print("\nGenerating clickable URLs for posts...")
+        for item in final_posts:
+            # Note: Search results have a slightly different structure
+            author_handle = item.get('author', {}).get('handle')
+            post_uri = item.get('uri')
+            if author_handle and post_uri:
+                post_id = post_uri.split('/')[-1]
+                item['post_url'] = f"https://bsky.app/profile/{author_handle}/post/{post_id}"
 
         # --- 3. Fetching Comments in Parallel ---
         if final_posts:

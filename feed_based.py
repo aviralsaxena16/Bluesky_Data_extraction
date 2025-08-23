@@ -7,6 +7,7 @@ Features:
 - Saves results to a dedicated 'feed_model' directory.
 - Includes performance benchmarking and timestamp filtering.
 - Retains all original feed discovery and selection features.
+- Adds a clickable 'post_url' to each post object.
 """
 
 import requests
@@ -322,6 +323,16 @@ if __name__ == "__main__":
         print(f"--- Filtered down to {len(final_posts)} posts. ---")
     else:
         final_posts = feed_posts
+        
+    # --- NEW: Add clickable URL to each post ---
+    print("\nGenerating clickable URLs for posts...")
+    for item in final_posts:
+        post_data = item.get('post', {})
+        author_handle = post_data.get('author', {}).get('handle')
+        post_uri = post_data.get('uri')
+        if author_handle and post_uri:
+            post_id = post_uri.split('/')[-1]
+            item['post']['post_url'] = f"https://bsky.app/profile/{author_handle}/post/{post_id}"
 
     if final_posts:
         print(f"\nFetching comments for {len(final_posts)} posts using {MAX_WORKERS} parallel workers...")
