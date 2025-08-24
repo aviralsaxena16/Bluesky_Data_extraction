@@ -1,4 +1,4 @@
-from datetime import datetime, timezone
+from datetime import datetime, timezone, date
 import requests
 import os
 import time
@@ -256,15 +256,17 @@ if __name__ == "__main__":
                 lower_limit_str = clean_input(input("Enter start date (YYYY-MM-DD, blank for no limit): ")).strip()
                 upper_limit_str = clean_input(input("Enter end date (YYYY-MM-DD, blank for no limit): ")).strip()
 
-                lower_limit = datetime.strptime(lower_limit_str, "%Y-%m-%d") if lower_limit_str else datetime.min
-                upper_limit = datetime.strptime(upper_limit_str, "%Y-%m-%d") if upper_limit_str else datetime.max
+                # --- CORRECTED LOGIC ---
+                # Use date objects for a direct and clear comparison.
+                lower_limit_date = date.fromisoformat(lower_limit_str) if lower_limit_str else date.min
+                upper_limit_date = date.fromisoformat(upper_limit_str) if upper_limit_str else date.max
 
                 filtered_by_time = []
                 for post in final_posts:
                     created_at_str = post.get('record', {}).get('createdAt')
                     if created_at_str:
-                        post_date = datetime.fromisoformat(created_at_str.replace("Z", "+00:00"))
-                        if lower_limit.date() <= post_date.date() <= upper_limit.date():
+                        post_date = datetime.fromisoformat(created_at_str.replace("Z", "+00:00")).date()
+                        if lower_limit_date <= post_date <= upper_limit_date:
                             filtered_by_time.append(post)
                 
                 print(f"Filtered down to {len(filtered_by_time)} posts by date.")
@@ -272,7 +274,7 @@ if __name__ == "__main__":
             except ValueError:
                 print("⚠️ Invalid date format. Please use YYYY-MM-DD.")
         
-        # --- NEW: Add clickable URL to each post ---
+        # --- Add clickable URL to each post ---
         print("\nGenerating clickable URLs for posts...")
         for item in final_posts:
             # Note: Search results have a slightly different structure
