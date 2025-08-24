@@ -4,7 +4,6 @@ import os
 import time
 import json
 from concurrent.futures import ThreadPoolExecutor
-
 # --- Configuration ---
 # Use the public API endpoint for unauthenticated requests
 BSKY_HOST = "https://public.api.bsky.app"
@@ -75,6 +74,9 @@ def get_whats_hot_classic(max_posts):
             print(f"   Fetched {len(posts_on_page)} posts. Total so far: {len(all_posts)}")
 
             cursor = response.get('cursor')
+            
+            # print(cursor)
+            
             if not cursor:
                 print("Reached the end of the feed.")
                 break

@@ -152,6 +152,7 @@ class BlueskySession:
                 print(f"   Fetched {len(posts_on_page)} posts. Total so far: {len(all_posts)}")
 
                 cursor = response.get('cursor')
+                # print(cursor)
                 if not cursor:
                     print("Reached the end of the search results.")
                     break
