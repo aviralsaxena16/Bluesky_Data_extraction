@@ -4,6 +4,7 @@ import time
 import getpass
 import json
 from datetime import datetime
+from dotenv import load_dotenv
 
 # --- Configuration ---
 # The unique URI for the "What's Hot Classic" feed generator.
@@ -163,14 +164,13 @@ class BlueskySession:
 
 
 if __name__ == "__main__":
+    load_dotenv()
     # --- Main Execution ---
     print("--- Bluesky Feed Fetcher ---")
     
     # Securely get user credentials
-    user_handle = input("Enter your Bluesky handle (e.g., yourname.bsky.social): ")
-    # IMPORTANT: For security, it is highly recommended to use an App Password.
-    # You can create one in Bluesky under Settings -> App Passwords.
-    app_password = input("Enter your App Password (will be visible): ")
+    user_handle = os.environ.get("BSKY_USERNAME")
+    app_password = os.environ.get("BSKY_PASSWORD")
 
     # 1. Create a session instance and log in
     session = BlueskySession(user_handle, app_password)

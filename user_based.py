@@ -4,6 +4,7 @@ import time
 import getpass
 import json
 from datetime import datetime
+from dotenv import load_dotenv
 
 # --- Configuration ---
 BSKY_HOST = "https://bsky.social"
@@ -186,10 +187,11 @@ def search_and_select_user(session):
         return None
 
 if __name__ == "__main__":
+    load_dotenv()
     print("--- Bluesky User Post Archiver ---")
     
-    user_handle = clean_input(input("Enter your Bluesky handle (e.g., yourname.bsky.social): "))
-    app_password = clean_input(input("Enter your App Password (will be visible): "))
+    user_handle = os.environ.get("BSKY_USERNAME")
+    app_password = os.environ.get("BSKY_PASSWORD")
 
     session = BlueskySession(user_handle, app_password)
     if session.create_session():

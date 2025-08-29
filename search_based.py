@@ -4,6 +4,7 @@ import time
 import getpass
 import json
 from datetime import datetime
+from dotenv import load_dotenv
 
 # --- Configuration ---
 BSKY_HOST = "https://bsky.social"
@@ -150,10 +151,11 @@ class BlueskySession:
         return all_posts
 
 if __name__ == "__main__":
+    load_dotenv()
     print("--- Bluesky Advanced Discovery Tool ---")
     
-    user_handle = clean_input(input("Enter your Bluesky handle: "))
-    app_password = clean_input(input("Enter your App Password: "))
+    user_handle = os.environ.get("BSKY_USERNAME")
+    app_password = os.environ.get("BSKY_PASSWORD")
 
     session = BlueskySession(user_handle, app_password)
     if session.create_session():
